@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>hand‑controlled skeletal reptile · camera</title>
+  <style>
+    /* ======= 3D-ish Black/Blue Gradient Background (same) ======= */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-deep: #02040b;
+      --bg-dark: #050b14;
+      --blue-1: rgba(0, 128, 255, 0.18);
+      --blue-2: rgba(0, 180, 255, 0.12);
+      --blue-3: rgba(0, 80, 160, 0.15);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-deep);
+      overflow: hidden;
+      color: #fff;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    /* layered gradients for depth */
+    body {
+      background:
+        radial-gradient(1200px 900px at 25% 10%, var(--blue-1), transparent 60%),
+        radial-gradient(900px 700px at 80% 85%, var(--blue-3), transparent 55%),
+        radial-gradient(1400px 600px at 50% -10%, var(--blue-2), transparent 65%),
+        linear-gradient(180deg, var(--bg-deep) 0%, var(--bg-dark) 100%);
+      position: relative;
+    }
+
+    /* horizon grid for 3D feel */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+      background-size: 42px 42px, 42px 42px;
+      transform: perspective(900px) rotateX(62deg) translateY(30%);
+      transform-origin: top;
+      opacity: 0.14;
+      filter: blur(0.2px);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* floating glow/vignette */
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(900px 500px at 22% 8%, rgba(0,140,255,0.18), transparent 65%),
+        radial-gradient(1200px 700px at 70% 92%, rgba(0,120,220,0.12), transparent 70%),
+        radial-gradient(closest-side at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.6) 90%);
+      mix-blend-mode: screen;
+      opacity: 0.45;
+      animation: bg-float 14s ease-in-out infinite;
+      z-index: 0;
+    }
+
+    @keyframes bg-float {
+      0%   { transform: translateY(0) scale(1); }
+      50%  { transform: translateY(-1.5%) scale(1.02); }
+      100% { transform: translateY(0) scale(1); }
+    }
+
+    /* canvas – reptile sits on top */
+    #reptile {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 2;
+      pointer-events: none;  /* camera overlay gets interaction */
+    }
+
+    /* camera preview + status */
+    #video-overlay {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      width: 220px;
+      height: 165px;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.25);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.05);
+      backdrop-filter: blur(4px);
+      z-index: 10;
+      opacity: 0.8;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      transform-origin: bottom right;
+    }
+    #video-overlay:hover {
+      opacity: 1;
+      transform: scale(1.02);
+    }
+    #video-overlay video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* mirror for intuitive control */
+    }
+
+    .hint {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      z-index: 3;
+      color: rgba(220, 235, 255, 0.95);
+      font-size: 0.95rem;
+      font-weight: 400;
+      letter-spacing: 0.5px;
+      background: rgba(10, 20, 40, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: 10px 24px;
+      border-radius: 40px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 10px 30px -10px rgba(0,0,0,0.7);
+      pointer-events: none;
+      line-height: 1.4;
+    }
+
+    .hand-status {
+      position: absolute;
+      top: 24px;
+      left: 24px;
+      z-index: 3;
+      background: rgba(0,0,0,0.35);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: 8px 18px;
+      border-radius: 40px;
+      font-size: 0.9rem;
+      color: #d0e4ff;
+      border: 1px solid rgba(255,255,255,0.15);
+      pointer-events: none;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    }
+
+    /* small instruction for pinch */
+    .gesture-badge {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      z-index: 3;
+      background: rgba(180, 140, 255, 0.2);
+      backdrop-filter: blur(12px);
+      padding: 8px 16px;
+      border-radius: 40px;
+      font-size: 0.85rem;
+      color: #ffecaa;
+      border: 1px solid rgba(255,220,140,0.3);
+      pointer-events: none;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    }
+
+    @media (max-width: 600px) {
+      .hint { font-size: 0.8rem; bottom: 16px; left: 16px; padding: 8px 16px; }
+      #video-overlay { width: 160px; height: 120px; bottom: 16px; right: 16px; }
+      .hand-status { top: 16px; left: 16px; font-size: 0.8rem; padding: 6px 12px; }
+      .gesture-badge { top: 16px; right: 16px; font-size: 0.75rem; padding: 6px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="reptile" aria-label="Skeletal reptile controlled by your hand via camera"></canvas>
+  
+  <div class="hand-status" id="hand-status">📷 initializing camera...</div>
+  <div class="gesture-badge">🤏 pinch = reset position</div>
+  <div class="hint">🖐️ open palm → reptile follows · pinch to teleport</div>
+  
+  <!-- camera preview overlay -->
+  <div id="video-overlay">
+    <video id="hand-video" playsinline autoplay muted></video>
+  </div>
+
+  <!-- Import MediaPipe HandTracking -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/vision_bundle.js"></script>
+
+  <script>
+    (() => {
+      // ------------------------------------------------------------
+      // 1. Canvas setup (exactly same as before, but target controlled by hand)
+      // ------------------------------------------------------------
+      const canvas = document.getElementById('reptile');
+      const ctx = canvas.getContext('2d');
+      const statusEl = document.getElementById('hand-status');
+
+      // HiDPI
+      const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      function fit() {
+        const w = innerWidth, h = innerHeight;
+        canvas.width = Math.floor(w * DPR);
+        canvas.height = Math.floor(h * DPR);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+      addEventListener('resize', fit);
+      fit();
+
+      // ------------------------------------------------------------
+      // 2. Hand tracking setup – target will be controlled by palm
+      // ------------------------------------------------------------
+      const target = { x: innerWidth * 0.5, y: innerHeight * 0.5 }; // fallback
+
+      // MediaPipe hand landmarker
+      let handLandmarker;
+      let lastVideoTime = -1;
+      const video = document.getElementById('hand-video');
+
+      // hand state
+      let handPresent = false;
+      let pinchDetected = false;
+      let lastPinchState = false;
+      
+      // smooth hand position (avoid jitter)
+      const smoothHand = { x: target.x, y: target.y };
+
+      async function initHandTracking() {
+        try {
+          statusEl.innerHTML = '📷 requesting camera...';
+          const vision = await FilesetResolver.forVisionTasks(
+            'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.2/wasm'
+          );
+          handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+              delegate: 'GPU'
+            },
+            numHands: 1,            // track one hand for simplicity
+            runningMode: 'VIDEO',
+            minHandDetectionConfidence: 0.5,
+            minHandPresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5
+          });
+
+          // start camera
+          if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { facingMode: 'user', width: 640, height: 480 } 
+            });
+            video.srcObject = stream;
+            video.addEventListener('loadeddata', () => {
+              video.play();
+              statusEl.innerHTML = '🖐️ camera ready · show hand';
+              detectHands();
+            });
+          } else {
+            statusEl.innerHTML = '⚠️ no camera access';
+          }
+        } catch (e) {
+          console.warn('Hand tracking init failed, fallback to mouse', e);
+          statusEl.innerHTML = '⚠️ camera failed · using mouse';
+          // fallback: mouse control
+          addEventListener('mousemove', e => { target.x = e.clientX; target.y = e.clientY; });
+        }
+      }
+
+      async function detectHands() {
+        if (!handLandmarker || video.readyState < 2) {
+          requestAnimationFrame(detectHands);
+          return;
+        }
+        const startTimeMs = performance.now();
+        if (lastVideoTime !== video.currentTime) {
+          lastVideoTime = video.currentTime;
+          const result = handLandmarker.detectForVideo(video, startTimeMs);
+          processHandResults(result);
+        }
+        requestAnimationFrame(detectHands);
+      }
+
+      function processHandResults(result) {
+        if (result.landmarks && result.landmarks.length > 0) {
+          // use first hand
+          const landmarks = result.landmarks[0];
+          // palm center ≈ landmark 0 (wrist) – stable base
+          const palm = landmarks[0]; 
+          
+          // convert normalized (0-1) to screen coordinates (mirror for intuition)
+          const rawX = (1 - palm.x) * innerWidth;   // mirror because video is mirrored
+          const rawY = palm.y * innerHeight;
+          
+          // smooth
+          smoothHand.x += (rawX - smoothHand.x) * 0.3;
+          smoothHand.y += (rawY - smoothHand.y) * 0.3;
+          
+          target.x = smoothHand.x;
+          target.y = smoothHand.y;
+
+          // detect pinch (thumb tip 4 ↔ index tip 8)
+          const thumb = landmarks[4];
+          const index = landmarks[8];
+          const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y, thumb.z - index.z);
+          pinchDetected = dist < 0.05;  // threshold
+
+          handPresent = true;
+          statusEl.innerHTML = '🖐️ hand tracked · pinch ' + (pinchDetected ? '🤏 YES' : '');
+        } else {
+          handPresent = false;
+          statusEl.innerHTML = '👋 no hand · move into camera';
+        }
+      }
+
+      // fallback mouse control if camera fails or no hand
+      addEventListener('mousemove', e => {
+        if (!handPresent) {  // if hand lost, mouse takes over
+          target.x = e.clientX; 
+          target.y = e.clientY;
+        }
+      });
+      addEventListener('touchmove', e => {
+        const t = e.touches[0]; 
+        if (!t) return;
+        if (!handPresent) {
+          target.x = t.clientX; 
+          target.y = t.clientY;
+        }
+      }, { passive: true });
+
+      // ------------------------------------------------------------
+      // 3. Reptile core – IDENTICAL to original, but target now from hand
+      // ------------------------------------------------------------
+      const head = { x: innerWidth * 0.35, y: innerHeight * 0.75, a: 0 };
+      const MAX_SPEED   = 150;
+      const MAX_TURN    = 2.2;
+      const SLOW_RADIUS = 140;
+      const STOP_RADIUS = 4;
+
+      const NUM_DOTS = 500;
+      const GAP_PX   = 2;
+      const trail = [{ x: head.x, y: head.y }];
+
+      (function seedTrail() {
+        const dx = Math.cos(head.a), dy = Math.sin(head.a);
+        const total = (NUM_DOTS - 1) * GAP_PX;
+        for (let d = total; d >= GAP_PX; d -= GAP_PX) {
+          trail.unshift({ x: head.x - dx * d, y: head.y - dy * d });
+        }
+      })();
+
+      function angleTowards(a, b, maxStep) {
+        let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+        if (d >  maxStep) d =  maxStep;
+        if (d < -maxStep) d = -maxStep;
+        return a + d;
+      }
+      const clamp01 = v => Math.max(0, Math.min(1, v));
+
+      function sampleTrail(distBack) {
+        let need = distBack;
+        let i = trail.length - 1;
+        let p = trail[i];
+        while (i > 0) {
+          const q = trail[i - 1];
+          const seg = Math.hypot(p.x - q.x, p.y - q.y);
+          if (seg >= need && seg > 0) {
+            const t = need / seg;
+            return { x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t };
+          }
+          need -= seg;
+          i--;
+          p = q;
+        }
+        return trail[0];
+      }
+
+      function directionAt(offset) {
+        const ahead  = sampleTrail(Math.max(0, offset - 2));
+        const behind = sampleTrail(offset + 2);
+        const vx = ahead.x - behind.x, vy = ahead.y - behind.y;
+        return (vx || vy) ? Math.atan2(vy, vx) : head.a;
+      }
+
+      function drawCurvedArmsAt(p, aBack, length, baseAngRad, curveDegRad) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+
+        for (const s of [-1, +1]) {
+          const armAngle  = aBack + s * baseAngRad;
+          const ctrlAngle = armAngle + s * curveDegRad;
+
+          const ctrlLen = length * 0.55;
+          const endX = p.x + Math.cos(armAngle) * length;
+          const endY = p.y + Math.sin(armAngle) * length;
+          const cx   = p.x + Math.cos(ctrlAngle) * ctrlLen;
+          const cy   = p.y + Math.sin(ctrlAngle) * ctrlLen;
+
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.quadraticCurveTo(cx, cy, endX, endY);
+          ctx.stroke();
+        }
+      }
+
+      // ----- legs (exactly the same as original) -----
+      const LEG_BODY_R    = 6;
+      const SWAY_MAX      = 4.5;
+      const STEP_MIN      = 10;
+      const STEP_MAX      = 26;
+      const LIFT_MIN      = 4;
+      const LIFT_MAX      = 10;
+      const BASE_REACH    = 12;
+      const KNEE_OUT      = 6;
+      const THIGH_W_BASE  = 2.0;
+      const SHIN_W_BASE   = 1.5;
+
+      const LEG_ANCHORS_SMALL = [16, 28, 40, 52];
+      const LEG_ANCHORS_BIG   = [102, 120, 138, 156, 174, 192];
+      const LEG_ANCHORS_BIG2  = [210, 228, 246, 264, 282, 300];
+      const LEG_ANCHORS_MED   = [318, 336, 354, 372, 390, 408];
+
+      function makeLegEntry(idx, scale) {
+        return {
+          idx, scale, centerPrev: null,
+          sides: [
+            { side: -1, phase: 'stance', foot: {x:0,y:0}, swing: null },
+            { side: +1, phase: 'stance', foot: {x:0,y:0}, swing: null },
+          ]
+        };
+      }
+
+      const legs = [
+        ...LEG_ANCHORS_SMALL.map(i => makeLegEntry(i, 1.0)),
+        ...LEG_ANCHORS_BIG  .map(i => makeLegEntry(i, 1.7)),
+        ...LEG_ANCHORS_BIG2 .map(i => makeLegEntry(i, 1.6)),
+        ...LEG_ANCHORS_MED  .map(i => makeLegEntry(i, 1.3)),
+      ];
+
+      function initLegs() {
+        for (const L of legs) {
+          const off = L.idx * GAP_PX;
+          const p = sampleTrail(off);
+          const a = directionAt(off);
+          const nx = -Math.sin(a), ny = Math.cos(a);
+          const tx =  Math.cos(a), ty = Math.sin(a);
+
+          L.centerPrev = { x: p.x, y: p.y };
+
+          const bodyR   = LEG_BODY_R * L.scale;
+          const sway    = SWAY_MAX * 0.5 * L.scale;
+          const reach   = BASE_REACH * L.scale;
+
+          for (const S of L.sides) {
+            const hipX = p.x + nx * bodyR * S.side;
+            const hipY = p.y + ny * bodyR * S.side;
+            const stride = reach + (S.side > 0 ? STEP_MIN*0.4 : -STEP_MIN*0.2) * L.scale;
+            S.foot.x = hipX + tx * stride + nx * (sway * S.side);
+            S.foot.y = hipY + ty * stride + ny * (sway * S.side);
+          }
+          const R = L.sides[1];
+          const hipRX = p.x + nx * bodyR * R.side;
+          const hipRY = p.y + ny * bodyR * R.side;
+          const targetX = hipRX + tx * (reach + STEP_MIN * L.scale) + nx * (SWAY_MAX*0.6 * L.scale * R.side);
+          const targetY = hipRY + ty * (reach + STEP_MIN * L.scale) + ny * (SWAY_MAX*0.6 * L.scale * R.side);
+          const midX = (R.foot.x + targetX)/2, midY = (R.foot.y + targetY)/2;
+          const lift = (LIFT_MIN + LIFT_MAX)/2 * L.scale;
+          R.phase = 'swing';
+          R.swing = {
+            t: 0.5, dur: 0.22,
+            sx: R.foot.x, sy: R.foot.y,
+            cx: midX + nx * lift * R.side,
+            cy: midY + ny * lift * R.side,
+            ex: targetX, ey: targetY
+          };
+        }
+      }
+      initLegs();
+
+      function partnerIsSwinging(L, side) {
+        const other = L.sides[side > 0 ? 0 : 1];
+        return other.phase === 'swing';
+      }
+
+      function updateAndRenderLegs(dt, tsec) {
+        ctx.lineCap = 'round';
+        for (const L of legs) {
+          const off = L.idx * GAP_PX;
+          const p = sampleTrail(off);
+          const a = directionAt(off);
+          const tx = Math.cos(a), ty = Math.sin(a);
+          const nx = -Math.sin(a), ny = Math.cos(a);
+
+          let speed = 0;
+          if (L.centerPrev) {
+            const dx = p.x - L.centerPrev.x, dy = p.y - L.centerPrev.y;
+            speed = dt > 0 ? Math.hypot(dx, dy) / dt : 0;
+          }
+          L.centerPrev = { x: p.x, y: p.y };
+          const v = clamp01(speed / 120);
+
+          const bodyR    = LEG_BODY_R * L.scale;
+          const stepLen  = (STEP_MIN + (STEP_MAX - STEP_MIN) * v) * L.scale;
+          const swayAmp  = (SWAY_MAX*0.6 + (SWAY_MAX - SWAY_MAX*0.6) * v) * L.scale;
+          const swingDur = (0.28 - (0.28-0.12) * v) * (1.0 / Math.sqrt(L.scale));
+          const liftAmt  = (LIFT_MIN + (LIFT_MAX - LIFT_MIN) * v) * L.scale * 0.9;
+          const kneeOut  = KNEE_OUT * L.scale;
+          const release  = stepLen * 0.7;
+
+          const thighW = Math.max(1.5, THIGH_W_BASE * Math.sqrt(L.scale));
+          const shinW  = Math.max(1.0, SHIN_W_BASE * Math.sqrt(L.scale));
+          const toeLen = 5 * L.scale * 0.9;
+
+          for (const S of L.sides) {
+            const hipX = p.x + nx * bodyR * S.side;
+            const hipY = p.y + ny * bodyR * S.side;
+
+            if (S.phase === 'swing') {
+              S.swing.t += dt / S.swing.dur;
+              const t = Math.min(1, S.swing.t);
+              const u = 1 - t;
+              const bx = u*u*S.swing.sx + 2*u*t*S.swing.cx + t*t*S.swing.ex;
+              const by = u*u*S.swing.sy + 2*u*t*S.swing.cy + t*t*S.swing.ey;
+              S.foot.x = bx; S.foot.y = by;
+              if (t >= 1) { S.phase = 'stance'; S.swing = null; }
+            } else {
+              const fx = S.foot.x, fy = S.foot.y;
+              const proj = (hipX - fx)*tx + (hipY - fy)*ty;
+              const dist = Math.hypot(hipX - fx, hipY - fy);
+              const shouldStep = (proj > release || dist > stepLen*1.2) && !partnerIsSwinging(L, S.side);
+
+              if (shouldStep) {
+                const ex = hipX + tx * stepLen + nx * (swayAmp * S.side);
+                const ey = hipY + ty * stepLen + ny * (swayAmp * S.side);
+                const mx = (fx + ex) * 0.5, my = (fy + ey) * 0.5;
+
+                S.phase = 'swing';
+                S.swing = {
+                  t: 0, dur: swingDur,
+                  sx: fx, sy: fy,
+                  cx: mx + nx * liftAmt * S.side,
+                  cy: my + ny * liftAmt * S.side,
+                  ex, ey
+                };
+              }
+            }
+
+            // draw leg
+            const fx = S.foot.x, fy = S.foot.y;
+            const midX = (hipX + fx) * 0.5, midY = (hipY + fy) * 0.5;
+            const kneeB = kneeOut * (0.75 + 0.25*Math.cos((L.idx*0.15))) * S.side;
+            const kneeX = midX + nx * kneeB, kneeY = midY + ny * kneeB;
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = thighW;
+            ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.lineTo(kneeX, kneeY); ctx.stroke();
+
+            ctx.lineWidth = shinW;
+            ctx.beginPath(); ctx.moveTo(kneeX, kneeY); ctx.lineTo(fx, fy); ctx.stroke();
+
+            const footAng = Math.atan2(fy - kneeY, fx - kneeX);
+            const spread = 0.45;
+            for (let j = -1; j <= 1; j++) {
+              const px = fx + Math.cos(footAng + j*spread) * toeLen;
+              const py = fy + Math.sin(footAng + j*spread) * toeLen;
+              ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(px, py); ctx.stroke();
+            }
+          }
+        }
+      }
+
+      // ------------------------------------------------------------
+      // 4. Animation loop (with pinch reset)
+      // ------------------------------------------------------------
+      let last = performance.now();
+      let tsec = 0;
+
+      function loop(now) {
+        const dt = Math.min(0.03, (now - last) / 1000);
+        last = now;
+        tsec += dt;
+
+        // ----- pinch gesture: reset reptile to hand position (teleport) -----
+        if (pinchDetected && !lastPinchState) {
+          // pinch just started → teleport head to hand, clear trail for instant response
+          head.x = target.x;
+          head.y = target.y;
+          // reset trail
+          trail.length = 0;
+          trail.push({ x: head.x, y: head.y });
+          // re-seed
+          const dx = Math.cos(head.a), dy = Math.sin(head.a);
+          const total = (NUM_DOTS - 1) * GAP_PX;
+          for (let d = total; d >= GAP_PX; d -= GAP_PX) {
+            trail.unshift({ x: head.x - dx * d, y: head.y - dy * d });
+          }
+          // re-init legs for new position
+          initLegs();
+
+          statusEl.innerHTML = '🤏 RESET!';
+        }
+        lastPinchState = pinchDetected;
+
+        // ----- steering: hand target -----
+        const dx = target.x - head.x;
+        const dy = target.y - head.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > STOP_RADIUS) {
+          const desired = Math.atan2(dy, dx);
+          head.a = angleTowards(head.a, desired, MAX_TURN * dt);
+
+          const speed = MAX_SPEED * clamp01((dist - STOP_RADIUS) / SLOW_RADIUS);
+          const step = Math.min(speed * dt, dist - STOP_RADIUS);
+
+          head.x += Math.cos(head.a) * step;
+          head.y += Math.sin(head.a) * step;
+        } else {
+          head.x = target.x;
+          head.y = target.y;
+        }
+
+        // trail extension
+        const lastPt = trail[trail.length - 1];
+        if (Math.hypot(head.x - lastPt.x, head.y - lastPt.y) > 0.5) {
+          trail.push({ x: head.x, y: head.y });
+        }
+        if (trail.length > 12000) trail.splice(0, trail.length - 12000);
+
+        // draw everything
+        ctx.clearRect(0, 0, innerWidth, innerHeight);
+
+        // dots
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < NUM_DOTS; i++) {
+          const offset = i * GAP_PX;
+          const p = sampleTrail(offset);
+          ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+        }
+
+        // arms (exactly as original)
+        const BASE_ANG = Math.PI/4;
+        const CURVE_DEG = 10 * Math.PI/180;
+        // arms1
+        for (let idx of [2,4,6,8,10]) {
+          const offset = idx * GAP_PX;
+          const p = sampleTrail(offset);
+          const aBack = directionAt(offset) + Math.PI;
+          drawCurvedArmsAt(p, aBack, 10, BASE_ANG, CURVE_DEG);
+        }
+        // arms2
+        for (let n=0; n<15; n++) {
+          const idx = 12 + n*6;
+          const offset = idx * GAP_PX;
+          const p = sampleTrail(offset);
+          const aBack = directionAt(offset) + Math.PI;
+          drawCurvedArmsAt(p, aBack, 20, BASE_ANG, CURVE_DEG);
+        }
+        // arms3
+        const tailIdx = NUM_DOTS-1;
+        for (let n=0; n<40; n++) {
+          const idx = 102 + n*6;
+          if (idx > tailIdx) break;
+          const offset = idx * GAP_PX;
+          const p = sampleTrail(offset);
+          const aBack = directionAt(offset) + Math.PI;
+          drawCurvedArmsAt(p, aBack, 50, BASE_ANG, CURVE_DEG);
+        }
+        // arms4 taper
+        const startTaper = 102 + 39*6;
+        if (startTaper < tailIdx) {
+          const span = tailIdx - startTaper;
+          for (let idx = startTaper; idx <= tailIdx; idx += 6) {
+            const t = (tailIdx - idx) / span;
+            const len = 5 + (50-5)*t;
+            const off = idx * GAP_PX;
+            const p = sampleTrail(off);
+            const aBack = directionAt(off) + Math.PI;
+            drawCurvedArmsAt(p, aBack, len, BASE_ANG, CURVE_DEG);
+          }
+        }
+
+        // legs
+        updateAndRenderLegs(dt, tsec);
+
+        requestAnimationFrame(loop);
+      }
+
+      // start hand tracking & animation
+      initHandTracking();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

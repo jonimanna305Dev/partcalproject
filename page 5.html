@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>hand controlled particles · live camera + no mouse</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0c0f;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+        }
+
+        .main-stage {
+            position: relative;
+            border-radius: 2rem;
+            background: #1a1d24;
+            padding: 1rem;
+            box-shadow: 0 30px 50px rgba(0, 0, 0, 0.8);
+        }
+
+        canvas {
+            display: block;
+            width: 960px;
+            height: 540px;
+            border-radius: 1.5rem;
+            background: #0f121a;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05), 0 10px 25px black;
+            cursor: default;  /* no mouse hint */
+        }
+
+        /* live camera overlay (small picture-in-picture) */
+        .live-preview {
+            position: absolute;
+            bottom: 2rem;
+            right: 2rem;
+            width: 180px;
+            height: 135px;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.9), 0 0 0 2px #3a4050;
+            border: 2px solid #2f3542;
+            background: #202430;
+            transform: scaleX(-1); /* mirror for intuitive self-view */
+            z-index: 10;
+            pointer-events: none;  /* so it doesn't block any imaginary mouse */
+        }
+
+        .live-preview video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            transform: scaleX(-1); /* double mirror to keep correct orientation (already flipped by container) */
+        }
+
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 1rem;
+            color: #ccd9f0;
+            font-weight: 400;
+            padding: 0 1rem;
+        }
+
+        .hand-status {
+            background: #272c38;
+            padding: 0.5rem 1.6rem;
+            border-radius: 40px;
+            font-size: 1rem;
+            border: 1px solid #49516b;
+            box-shadow: inset 0 2px 6px #0b0d12;
+            backdrop-filter: blur(4px);
+        }
+
+        .hand-status span {
+            color: #b3f07b;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+
+        .direction-badge {
+            background: #262e3c;
+            padding: 0.5rem 2rem;
+            border-radius: 40px;
+            font-size: 1.1rem;
+            border: 1px solid #5d6785;
+            box-shadow: 0 5px 10px #04070a;
+        }
+
+        .direction-badge strong {
+            color: #ffc966;
+            text-transform: uppercase;
+            margin-left: 0.4rem;
+        }
+
+        .status-note {
+            color: #5e6c8a;
+            font-size: 0.9rem;
+            margin-top: 0.7rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div class="main-stage">
+    <canvas id="particleCanvas" width="960" height="540"></canvas>
+
+    <!-- live camera PIP (always visible) -->
+    <div class="live-preview">
+        <video id="liveVideo" autoplay playsinline muted></video>
+    </div>
+
+    <div class="info-panel">
+        <div class="hand-status">🖐️ hand <span id="handDetected">waiting</span></div>
+        <div class="direction-badge">⬆️ dir <strong id="directionLabel">···</strong></div>
+    </div>
+    <div class="status-note">✱ only your hand moves the particles · live camera preview</div>
+</div>
+
+<script>
+    (function() {
+        // ---------- canvas setup ----------
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+        const w = 960, h = 540;
+
+        // ---------- hand tracking state (only from camera, no mouse) ----------
+        let handPresent = false;
+        // normalized target (0..1) – will be driven by skin detection
+        let targetX = 0.5, targetY = 0.5;          // final smoothed position
+        let rawX = 0.5, rawY = 0.5;                // raw from camera (before smoothing)
+        const smoothFactor = 0.22;                  // lag / responsiveness
+
+        // UI elements
+        const handDetectedSpan = document.getElementById('handDetected');
+        const directionLabel = document.getElementById('directionLabel');
+
+        // direction helper
+        const dirDisplay = {
+            'left': '← LEFT',
+            'right': '→ RIGHT',
+            'up': '↑ UP',
+            'down': '↓ DOWN',
+            'none': '○ center'
+        };
+        let currentDirection = 'none';
+
+        // ---------- particle system ----------
+        const PARTICLE_COUNT = 820;
+        let particles = [];
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push({
+                x: Math.random(),
+                y: Math.random(),
+                vx: (Math.random() - 0.5) * 0.014,
+                vy: (Math.random() - 0.5) * 0.014,
+                size: 1.8 + Math.random() * 5,
+                baseSpeed: 0.0025 + Math.random() * 0.008
+            });
+        }
+
+        // ---------- camera access & live preview ----------
+        const video = document.getElementById('liveVideo'); // shown in PIP
+
+        // Hidden canvas for fast skin detection (small resolution)
+        const procCanvas = document.createElement('canvas');
+        const procCtx = procCanvas.getContext('2d');
+        procCanvas.width = 160;
+        procCanvas.height = 120;
+
+        let cameraActive = false;
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user'
+                    }
+                });
+                video.srcObject = stream;
+                await video.play();
+                cameraActive = true;
+                handDetectedSpan.innerText = 'searching';
+            } catch (err) {
+                console.warn('Camera not available:', err);
+                handDetectedSpan.innerText = 'no camera';
+                // No fallback to mouse — we keep handPresent = false, particles drift gently.
+                // We still show "no camera", but particles will wander randomly (no control)
+            }
+        }
+        startCamera();
+
+        // ---------- skin color centroid (simple heuristic) ----------
+        function getSkinCentroid(imageData) {
+            const data = imageData.data;
+            const width = procCanvas.width;
+            const height = procCanvas.height;
+            let sumX = 0, sumY = 0, count = 0;
+
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+
+                    // very rough skin color rule: r > g, r > b, and some minimum brightness
+                    // also not too extreme (avoid background)
+                    if (r > 60 && g > 30 && b > 20 && r > g + 8 && r > b + 8) {
+                        // additional luma check: not too dark, not too bright
+                        const max = Math.max(r, g, b);
+                        const min = Math.min(r, g, b);
+                        if (max - min > 15) {  // some saturation
+                            sumX += x;
+                            sumY += y;
+                            count++;
+                        }
+                    }
+                }
+            }
+
+            if (count > 25) {  // enough skin pixels = hand present
+                return { x: sumX / count, y: sumY / count, count };
+            }
+            return null; // no hand
+        }
+
+        // ---------- update hand position from camera (called every frame) ----------
+        function pollHandFromCamera() {
+            if (!cameraActive || video.readyState < 2) {
+                // camera not ready yet — keep previous state
+                return;
+            }
+
+            try {
+                // draw video (already mirrored by CSS, but we sample raw)
+                procCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
+                const frame = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height);
+                const centroid = getSkinCentroid(frame);
+
+                if (centroid) {
+                    // normalize coordinates (0..1)
+                    let normX = centroid.x / procCanvas.width;
+                    let normY = centroid.y / procCanvas.height;
+
+                    // keep away from extreme edges (optional)
+                    normX = Math.min(0.98, Math.max(0.02, normX));
+                    normY = Math.min(0.98, Math.max(0.02, normY));
+
+                    rawX = normX;
+                    rawY = normY;
+                    handPresent = true;
+                    handDetectedSpan.innerText = 'yes';
+                } else {
+                    handPresent = false;
+                    handDetectedSpan.innerText = 'no';
+                    // rawX / rawY remain at last known (slowly fade? but we keep them, target smoothing will linger)
+                }
+            } catch (e) {
+                // ignore frame errors
+            }
+        }
+
+        // ---------- smooth target & direction classification ----------
+        function updateSmoothedTarget() {
+            // smooth towards raw hand position (only if hand present, else drift slowly? we keep pulling to raw but raw stays last)
+            // but if no hand for long, we let target very slowly drift to center? not needed – we just follow raw.
+            targetX += (rawX - targetX) * smoothFactor;
+            targetY += (rawY - targetY) * smoothFactor;
+
+            // direction label based on offset from screen center (0.5)
+            const dx = targetX - 0.5;
+            const dy = targetY - 0.5;
+            const dead = 0.04;
+
+            if (Math.abs(dx) < dead && Math.abs(dy) < dead) {
+                currentDirection = 'none';
+            } else if (Math.abs(dx) > Math.abs(dy)) {
+                currentDirection = dx > 0 ? 'right' : 'left';
+            } else {
+                currentDirection = dy > 0 ? 'down' : 'up';
+            }
+            directionLabel.innerText = dirDisplay[currentDirection];
+        }
+
+        // ---------- particle physics (attracted to target) ----------
+        function updateParticles() {
+            for (let p of particles) {
+                const dx = targetX - p.x;
+                const dy = targetY - p.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist > 0.002) {
+                    const pull = Math.min(0.05, dist * 0.2) * p.baseSpeed * 3.2;
+                    p.vx += dx * pull;
+                    p.vy += dy * pull;
+                }
+
+                // speed limit
+                const maxSp = 0.024;
+                let sp = Math.hypot(p.vx, p.vy);
+                if (sp > maxSp) {
+                    p.vx *= maxSp / sp;
+                    p.vy *= maxSp / sp;
+                }
+
+                // move
+                p.x += p.vx;
+                p.y += p.vy;
+
+                // soft boundaries (bounce)
+                if (p.x < 0) { p.x = 0; p.vx *= -0.4; }
+                if (p.x > 1) { p.x = 1; p.vx *= -0.4; }
+                if (p.y < 0) { p.y = 0; p.vy *= -0.4; }
+                if (p.y > 1) { p.y = 1; p.vy *= -0.4; }
+
+                // tiny random walk
+                p.vx += (Math.random() - 0.5) * 0.001;
+                p.vy += (Math.random() - 0.5) * 0.001;
+            }
+        }
+
+        // ---------- drawing ----------
+        function drawScene() {
+            ctx.clearRect(0, 0, w, h);
+
+            // dark background
+            ctx.fillStyle = '#0b0e14';
+            ctx.fillRect(0, 0, w, h);
+
+            // draw particles
+            for (let p of particles) {
+                const sx = p.x * w;
+                const sy = p.y * h;
+
+                // brightness based on distance to target
+                const dx = targetX - p.x;
+                const dy = targetY - p.y;
+                const distNorm = Math.hypot(dx, dy); // 0..~1.4
+                const glow = Math.max(0.4, 1.2 - distNorm * 1.3);
+
+                // color shifts slightly with hand presence
+                const baseHue = handPresent ? 200 : 190; // blue / cyan
+                ctx.beginPath();
+                ctx.arc(sx, sy, p.size * (0.7 + 0.3 * Math.sin(Date.now() * 0.004 + p.x * 8)), 0, 2 * Math.PI);
+                ctx.fillStyle = `hsl(${baseHue}, 80%, ${50 + 25 * glow}%)`;
+                ctx.shadowColor = `hsl(${baseHue}, 85%, 70%)`;
+                ctx.shadowBlur = 16;
+                ctx.fill();
+            }
+
+            // hand target ring (subtle)
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(targetX * w, targetY * h, 18, 0, 2 * Math.PI);
+            ctx.strokeStyle = handPresent ? '#c0f2a0' : '#7088a8';
+            ctx.lineWidth = 2.2;
+            ctx.setLineDash([5, 8]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // tiny center dot
+            ctx.beginPath();
+            ctx.arc(targetX * w, targetY * h, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = handPresent ? '#b5ff8f' : '#6a8fbb';
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = handPresent ? '#b0ffa0' : '#5f9eff';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+
+        // ---------- animation loop (no mouse events attached) ----------
+        function tick() {
+            // 1. sample camera (this sets rawX/rawY and handPresent)
+            pollHandFromCamera();
+
+            // 2. smooth target position (even if no hand, raw stays at last known – gentle drift)
+            updateSmoothedTarget();
+
+            // 3. move particles toward target
+            updateParticles();
+
+            // 4. render
+            drawScene();
+
+            requestAnimationFrame(tick);
+        }
+
+        tick();
+
+        // ensure no mouse control is attached – we deliberately ignore mouse events.
+        // just to be safe, we could disable pointer events on canvas, but cursor already default.
+        // however we want to avoid accidental mouse move. so we add a no-op to be sure.
+        canvas.addEventListener('mousemove', (e) => {
+            // absolutely do nothing – mouse is ignored.
+            // (we don't even call preventDefault, just void)
+        });
+        canvas.addEventListener('mouseenter', () => {});
+        canvas.addEventListener('mouseleave', () => {});
+
+        // also disable context menu on canvas (optional)
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // small info: if camera inactive for long, show hint
+        setTimeout(() => {
+            if (!cameraActive) {
+                handDetectedSpan.innerText = 'unavailable';
+            }
+        }, 3500);
+    })();
+</script>
+</body>
+</html>

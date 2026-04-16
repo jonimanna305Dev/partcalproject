@@ -1,0 +1,269 @@
+<!-- ============================================ -->
+<!-- FILE: 1.html (camera sender)                 -->
+<!-- ============================================ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📤 CAMERA · 1.html (sender)</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0f2a30;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            padding: 16px;
+        }
+        .card {
+            background: #184c57;
+            max-width: 700px;
+            width: 100%;
+            border-radius: 3rem;
+            padding: 30px 25px;
+            box-shadow: 0 20px 30px #041116;
+            border: 2px solid #56a5b0;
+        }
+        h1 {
+            background: #feda9b;
+            display: inline-block;
+            padding: 12px 36px;
+            border-radius: 60px;
+            font-size: 2.2rem;
+            color: #0e363f;
+            margin-bottom: 25px;
+            box-shadow: 0 6px 0 #9b6d36;
+            border: 2px solid #ffbe6e;
+        }
+        .video-box {
+            background: #0f323b;
+            border-radius: 40px;
+            padding: 18px;
+            border: 4px solid #479fb0;
+            box-shadow: inset 0 0 0 3px #a5d5de;
+        }
+        video {
+            width: 100%;
+            border-radius: 30px;
+            background: #1a3b42;
+            border: 3px solid #c7e9f0;
+            aspect-ratio: 4/3;
+            object-fit: cover;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 25px;
+            margin: 30px 0 15px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            background: #fee1b5;
+            border: none;
+            font-size: 2rem;
+            font-weight: 700;
+            padding: 16px 38px;
+            border-radius: 50px;
+            color: #1a404b;
+            box-shadow: 0 7px 0 #a56f34, 0 6px 15px black;
+            cursor: pointer;
+            border: 2px solid #ffbc72;
+            transition: 0.05s linear;
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .btn:active {
+            box-shadow: 0 2px 0 #a56f34;
+            transform: translateY(5px);
+        }
+        .btn:disabled {
+            opacity: 0.4;
+            transform: translateY(4px);
+            box-shadow: 0 3px 0 #6b4a26;
+            pointer-events: none;
+        }
+        .info {
+            background: #1d4b53;
+            border-radius: 60px;
+            padding: 18px 24px;
+            color: #fff4db;
+            font-size: 1.5rem;
+            text-align: center;
+            border: 2px solid #ffc489;
+            margin: 10px 0;
+        }
+        .note {
+            color: #b3e2ea;
+            background: #10333b;
+            padding: 16px;
+            border-radius: 40px;
+            font-size: 1.2rem;
+            border: 1px solid #76b6c2;
+        }
+        .badge {
+            background: #cf3e4a;
+            color: #ffeab3;
+            padding: 10px 24px;
+            border-radius: 40px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🎥 1.html · CAM</h1>
+        <div class="video-box">
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+
+        <div class="controls">
+            <button class="btn" id="startBtn">🔴 START</button>
+            <button class="btn" id="stopBtn">⏹️ STOP</button>
+        </div>
+
+        <div class="info" id="statusIndicator">
+            📡 status: <span id="statusText">offline</span>
+        </div>
+
+        <div class="note">
+            ⚡ step 1: open <strong>1.html</strong> (this page) → start camera.<br>
+            ⚡ step 2: open <strong>2.html</strong> in another tab/window → watch live.<br>
+            <span class="badge">🔁 uses WebRTC (same device)</span>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            // simple WebRTC sender (1.html) — using broadcast channel for simplicity
+            // but for real video stream we need MediaStream and RTCPeerConnection.
+            // Here we use a more robust but simple approach: 
+            // Capture stream and create an ObjectURL via WebRTC? No, we will use 
+            // BroadcastChannel to exchange SDP? That's too complex.
+            // Instead, use WebRTC with simulated local connection.
+            // For demo, easiest: use WebRTC with two RTCPeerConnection on same page?
+            // But we need separate files. 
+            
+            // We'll implement simple WebRTC with window.open and handshake? Not reliable.
+            // Real solution: use WebRTC with STUN or same host. 
+            // To keep it work out of the box, I'll use WebRTC with local loopback + broadcastchannel for signaling.
+            
+            // More practical: Use WebRTC with serverless signaling via BroadcastChannel (same-origin).
+            // Both 1.html and 2.html will share a BroadcastChannel.
+            // 1.html: create offer, set local description, send offer via BroadcastChannel.
+            // 2.html: receive offer, set remote desc, create answer, send answer back.
+            // This works across tabs if same origin.
+            
+            console.log('1.html: camera sender ready');
+            
+            const localVideo = document.getElementById('localVideo');
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const statusSpan = document.getElementById('statusText');
+            
+            let localStream = null;
+            let peerConnection = null;
+            const channel = new BroadcastChannel('webrtc_live_channel');
+            let pendingCandidates = []; // for any ICE candidates before remote answer
+            
+            const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            
+            function updateStatus(txt) {
+                statusSpan.innerText = txt;
+            }
+            
+            // stop everything
+            function stopAll() {
+                if (localStream) {
+                    localStream.getTracks().forEach(t => t.stop());
+                    localStream = null;
+                }
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                localVideo.srcObject = null;
+                updateStatus('offline');
+                // re-enable start
+            }
+            
+            // start camera + webrtc
+            async function startCameraAndSignal() {
+                stopAll(); // fresh start
+                
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                    localVideo.srcObject = localStream;
+                    updateStatus('camera OK, connecting...');
+                    
+                    // create peerconnection
+                    peerConnection = new RTCPeerConnection(config);
+                    
+                    // add tracks
+                    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                    
+                    // create offer
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    
+                    // send offer via broadcast channel
+                    channel.postMessage({ type: 'offer', sdp: peerConnection.localDescription });
+                    
+                    // handle ice candidates and send to remote
+                    peerConnection.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            channel.postMessage({ type: 'candidate', candidate: event.candidate });
+                        }
+                    };
+                    
+                    // listen for answer and candidates from 2.html
+                    channel.onmessage = async (e) => {
+                        const data = e.data;
+                        if (data.type === 'answer' && data.sdp) {
+                            const remoteDesc = new RTCSessionDescription(data.sdp);
+                            await peerConnection.setRemoteDescription(remoteDesc);
+                            updateStatus('connected to 2.html');
+                        } else if (data.type === 'candidate' && data.candidate) {
+                            try {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                            } catch (e) {
+                                console.warn('error adding ice candidate', e);
+                            }
+                        }
+                    };
+                    
+                    // connection state change
+                    peerConnection.onconnectionstatechange = () => {
+                        if (peerConnection.connectionState === 'connected') {
+                            updateStatus('✅ LIVE to 2.html');
+                        } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+                            updateStatus('⚠️ disconnected');
+                        }
+                    };
+                    
+                } catch (err) {
+                    updateStatus('🚫 camera error');
+                    console.error(err);
+                    stopAll();
+                }
+            }
+            
+            startBtn.addEventListener('click', startCameraAndSignal);
+            stopBtn.addEventListener('click', () => {
+                stopAll();
+                // send stop signal to peer?
+                channel.postMessage({ type: 'stop' });
+            });
+            
+            // clean up on page unload
+            window.addEventListener('beforeunload', () => {
+                stopAll();
+                channel.close();
+            });
+        })();
+    </script>
+</body>
+</html>

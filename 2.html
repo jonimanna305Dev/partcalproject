@@ -1,0 +1,248 @@
+<!-- ============================================ -->
+<!-- FILE: 2.html (live video receiver)           -->
+<!-- ============================================ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📺 LIVE · 2.html (receiver)</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #1b2f3a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+        }
+        .viewer {
+            background: #194551;
+            max-width: 800px;
+            width: 100%;
+            border-radius: 3.5rem;
+            padding: 30px 25px;
+            box-shadow: 0 20px 30px #031016;
+            border: 3px solid #71b6c2;
+        }
+        h2 {
+            background: #feda9b;
+            display: inline-block;
+            padding: 12px 45px;
+            border-radius: 60px;
+            font-size: 2.3rem;
+            color: #143e48;
+            margin-bottom: 20px;
+            border: 2px solid #ffb259;
+            box-shadow: 0 6px 0 #9b6d36;
+        }
+        .live-area {
+            background: #0e303b;
+            border-radius: 45px;
+            padding: 20px;
+            border: 5px solid #398e9e;
+        }
+        video {
+            width: 100%;
+            border-radius: 35px;
+            background: #133942;
+            aspect-ratio: 4/3;
+            border: 4px solid #b1dbe3;
+            object-fit: cover;
+            transform: scaleX(-1);  /* mirror effect to match sender preview (optional) */
+        }
+        .status-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #235f6b;
+            border-radius: 60px;
+            padding: 15px 25px;
+            margin: 25px 0 10px;
+            color: #fff6da;
+            font-size: 1.8rem;
+            border: 2px solid #fec27e;
+        }
+        .live-badge {
+            background: #bb2e3a;
+            color: #ffeeb5;
+            border-radius: 50px;
+            padding: 10px 30px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 0 #691c24;
+        }
+        .live-badge::before {
+            content: "●";
+            font-size: 2.5rem;
+            animation: pulse 1.2s infinite;
+        }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } }
+        .note {
+            color: #c6edf5;
+            background: #13424b;
+            border-radius: 40px;
+            padding: 16px;
+            font-size: 1.3rem;
+            border: 1px solid #95cdd9;
+            text-align: center;
+        }
+        .reset-btn {
+            background: #fec196;
+            border: none;
+            font-size: 1.7rem;
+            padding: 16px 30px;
+            border-radius: 50px;
+            font-weight: bold;
+            color: #15353f;
+            box-shadow: 0 5px 0 #a56f34;
+            cursor: pointer;
+            border: 2px solid #ffac56;
+        }
+        .reset-btn:active { transform: translateY(4px); box-shadow: 0 1px 0 #a56f34; }
+    </style>
+</head>
+<body>
+    <div class="viewer">
+        <h2>📺 2.html · LIVE SHOW</h2>
+        <div class="live-area">
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+
+        <div class="status-panel">
+            <span>📡 status:</span>
+            <span id="receiverStatus">waiting for camera...</span>
+            <span class="live-badge" id="liveIndicator">LIVE</span>
+        </div>
+
+        <div style="display: flex; justify-content: center; margin: 20px 0;">
+            <button class="reset-btn" id="resetConnection">⟲ reset receiver</button>
+        </div>
+
+        <div class="note">
+            ⚡ open <strong>1.html</strong> in another tab, start camera → video appears here.<br>
+            🎥 same-origin communication via WebRTC + broadcast channel.
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const remoteVideo = document.getElementById('remoteVideo');
+            const receiverStatus = document.getElementById('receiverStatus');
+            const liveIndicator = document.getElementById('liveIndicator');
+            const resetBtn = document.getElementById('resetConnection');
+
+            let peerConnection = null;
+            const channel = new BroadcastChannel('webrtc_live_channel');
+            const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+            function setStatus(text, isLive = false) {
+                receiverStatus.innerText = text;
+                if (isLive) {
+                    liveIndicator.style.background = '#2b8248';
+                    liveIndicator.innerHTML = '● LIVE';
+                } else {
+                    liveIndicator.style.background = '#bb2e3a';
+                    liveIndicator.innerHTML = '● LIVE';
+                }
+            }
+
+            // reset / close existing peer connection
+            function cleanupPeer() {
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                // clear video
+                remoteVideo.srcObject = null;
+                setStatus('idle', false);
+            }
+
+            // create new peer connection as answerer
+            function createPeer() {
+                cleanupPeer();
+                peerConnection = new RTCPeerConnection(config);
+
+                // when remote adds track, display it
+                peerConnection.ontrack = (event) => {
+                    console.log('track received', event.streams[0]);
+                    remoteVideo.srcObject = event.streams[0];
+                    setStatus('✅ LIVE', true);
+                };
+
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        channel.postMessage({ type: 'candidate', candidate: event.candidate });
+                    }
+                };
+
+                peerConnection.onconnectionstatechange = () => {
+                    if (peerConnection.connectionState === 'connected') {
+                        setStatus('connected', true);
+                    } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+                        setStatus('disconnected', false);
+                        remoteVideo.srcObject = null;
+                    }
+                };
+            }
+
+            // initial peer ready
+            createPeer();
+
+            // listen for signaling from 1.html
+            channel.onmessage = async (e) => {
+                const data = e.data;
+                
+                if (data.type === 'offer' && data.sdp) {
+                    // ensure we have a fresh peer
+                    createPeer(); 
+                    
+                    const offer = new RTCSessionDescription(data.sdp);
+                    await peerConnection.setRemoteDescription(offer);
+                    
+                    // create answer
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    
+                    // send answer back to 1.html
+                    channel.postMessage({ type: 'answer', sdp: peerConnection.localDescription });
+                    
+                    setStatus('received offer, answered', false);
+                    
+                } else if (data.type === 'candidate' && data.candidate) {
+                    if (peerConnection && peerConnection.remoteDescription) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                        } catch (e) {
+                            console.warn('candidate add err', e);
+                        }
+                    } else {
+                        // store if needed? we can just ignore, but we'll keep as is
+                    }
+                } else if (data.type === 'stop') {
+                    cleanupPeer();
+                    createPeer();   // ready for next connection
+                }
+            };
+
+            // reset button manual
+            resetBtn.addEventListener('click', () => {
+                cleanupPeer();
+                createPeer();
+                setStatus('reset, waiting', false);
+            });
+
+            window.addEventListener('beforeunload', () => {
+                cleanupPeer();
+                channel.close();
+            });
+
+            setStatus('📡 waiting for 1.html', false);
+        })();
+    </script>
+</body>
+</html>
